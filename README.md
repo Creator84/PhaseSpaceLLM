@@ -18,7 +18,7 @@ Instead of a full vector database:
 - Batch document ingestion (PDF/TXT) with smart chunking
 - Strict RAG-style answers ("document does not specify" when no match)
 
-## Quick Start
+## Quick Start: Method 1
 
 1. Install dependencies  
    ```bash
@@ -26,9 +26,10 @@ Instead of a full vector database:
    ollama pull llama3.2
    ollama serve
 
-2. Run the API serverBash
+2. Run the API server
     ```bash
-    uvicorn api_server:app --reload --port 8000
+    uvicorn src.api_server:app --reload --port 8000
+    ```
     → Open http://localhost:8000
 
 3. Ingest a document
@@ -36,11 +37,16 @@ Instead of a full vector database:
     python ingest.py
     (edit TARGET_FILE or pass via arg)
 
+## Method 2 for install
+    ```bash
+    pip install -e .
+
 ## Project Structure
-- orbit_core.py — EMA-based phase-space orbit logic
-- api_server.py — FastAPI + UI for interaction
-- os2_wrapper.py — Persistent memory node (with batch_learn & recall)
-- ingest.py — Document → chunk → learn pipeline
+- `src/orbit_core.py` — EMA-based phase-space orbit logic
+- `src/api_server.py` — FastAPI + UI for interaction
+- `src/os2_wrapper.py` — Persistent memory node (with batch_learn & recall)
+- `ingest.py` — Document → chunk → learn pipeline
+- `examples/` — Sample scripts and test files
 
 ## Roadmap / Ideas
 - Add FAISS for >10k chunks
