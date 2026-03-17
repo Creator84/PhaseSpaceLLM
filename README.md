@@ -1,5 +1,7 @@
 # PhaseSpace LLM – Persistent Semantic Memory for Local LLMs
 
+![Dashboard Screenshot](dashboard.png)
+
 A lightweight, local-first memory system that maintains a **continuous "orbit"** (EMA-updated point) in semantic embedding space while storing exact text chunks for retrieval. Supports **incremental ingestion** from multiple sources (PDF, TXT, ZIM, APIs) with a persistent manifest to avoid re-processing.
 
 ## Core Idea
