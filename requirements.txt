@@ -1,0 +1,7 @@
+torch
+sentence-transformers
+ollama
+fastapi
+uvicorn
+pydantic
+PyPDF2

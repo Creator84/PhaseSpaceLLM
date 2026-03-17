@@ -1,0 +1,51 @@
+# Semantic Orbit Memory – Lightweight Persistent Latent Memory for LLMs
+
+A simple, local-first memory system that maintains a **continuous "orbit"** (EMA-updated point) in semantic embedding space while storing exact text chunks for retrieval.
+
+## Core Idea
+
+Instead of a full vector database:
+- New facts/documents are embedded (all-MiniLM-L6-v2) and smoothly incorporated into a single persistent latent state via exponential moving average (EMA).
+- This "orbit" acts as a compressed semantic attractor / summary of everything seen.
+- For synthesis or Q&A: cosine-rank chunks against the current objective → feed top resonant facts to a local LLM (Llama 3.2 via Ollama).
+
+→ Extremely low overhead, no indexing latency, runs forever in RAM or saved to disk.
+
+## Features
+
+- Persistent orbit state (save/load .pt files)
+- API server + browser UI for injecting facts & synthesizing reports
+- Batch document ingestion (PDF/TXT) with smart chunking
+- Strict RAG-style answers ("document does not specify" when no match)
+
+## Quick Start
+
+1. Install dependencies  
+   ```bash
+   pip install -r requirements.txt
+   ollama pull llama3.2
+   ollama serve
+
+2. Run the API serverBash
+    ```bash
+    uvicorn api_server:app --reload --port 8000
+    → Open http://localhost:8000
+
+3. Ingest a document
+    ```bash
+    python ingest.py
+    (edit TARGET_FILE or pass via arg)
+
+## Project Structure
+- orbit_core.py — EMA-based phase-space orbit logic
+- api_server.py — FastAPI + UI for interaction
+- os2_wrapper.py — Persistent memory node (with batch_learn & recall)
+- ingest.py — Document → chunk → learn pipeline
+
+## Roadmap / Ideas
+- Add FAISS for >10k chunks
+- Multi-orbit (topic-specific attractors)
+- Visualize orbit drift (PCA projection → plotly)
+- Decay old chunks by age/relevance
+
+MIT licensed – feel free to fork & experiment!
