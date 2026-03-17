@@ -5,16 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sklearn.decomposition import PCA
 from src.os2_wrapper import PhaseSpaceMemoryNode
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
 import ollama
 import logging
 import torch
 import torch.nn.functional as F
-import time
-import uuid
-import asyncio
-import json
-from fastapi.responses import StreamingResponse
 
 # Suppress FastAPI access logs
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -34,7 +28,6 @@ memory.load_brain("global_swarm_brain.pth")
 
 pca = PCA(n_components=3)
 LATEST_QUERY_VECTOR = None
-GPU_SEMAPHORE = asyncio.Semaphore(1)
 
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard():
@@ -288,45 +281,32 @@ async def get_points():
         
 class Query(BaseModel): text: str
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ChatCompletionRequest(BaseModel):
-    model: str
-    messages: List[ChatMessage]
-    temperature: Optional[float] = 0.7
-    stream: Optional[bool] = False
-    # We accept kwargs to ignore any extra settings frontends might send
-    model_config = {"extra": "allow"}
-
 @app.post("/search")
 async def search(q: Query):
     global LATEST_QUERY_VECTOR
     try:
-        async with GPU_SEMAPHORE:
-            # INTERCEPT THE EXACT MATH OF THE INSTANTANEOUS SEARCH
-            objective_vector = torch.tensor(memory.embedder.encode(q.text)).unsqueeze(0)
-            LATEST_QUERY_VECTOR = F.normalize(objective_vector, p=2, dim=1).numpy()
-            
-            # Recall from Swarm
-            resonant_context = memory.recall(q.text, top_k=3)
-            context_string = "\n---\n".join(resonant_context)
-            
-            system_prompt = """You are a strictly constrained data-extraction AI. You have NO external knowledge. You are completely blind to the outside world, coding, pop culture, and general trivia.
-            Your ONLY job is to answer the user's question using EXCLUSIVELY the provided DOCUMENT CHUNKS.
-            
-            CRITICAL RULES:
-            1. If the exact answer is not explicitly found in the chunks, you MUST reply with exactly: "I do not have data on this subject in my current memory vault."
-            2. Every document chunk provided to you begins with a [SOURCE: ...] tag. If you answer the question, you MUST add a "Sources Used:" list at the very end, citing exactly which tags provided the info.
-            """
-            
-            user_prompt = f"DOCUMENT CHUNKS:\n{context_string}\n\nQUESTION: {q.text}"
-            
-            response = ollama.chat(model='llama3.2', messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt}
-            ])
+        # INTERCEPT THE EXACT MATH OF THE INSTANTANEOUS SEARCH
+        objective_vector = torch.tensor(memory.embedder.encode(q.text)).unsqueeze(0)
+        LATEST_QUERY_VECTOR = F.normalize(objective_vector, p=2, dim=1).numpy()
+        
+        # Recall from Swarm
+        resonant_context = memory.recall(q.text, top_k=3)
+        context_string = "\n---\n".join(resonant_context)
+        
+        system_prompt = """You are a strictly constrained data-extraction AI. You have NO external knowledge. You are completely blind to the outside world, coding, pop culture, and general trivia.
+        Your ONLY job is to answer the user's question using EXCLUSIVELY the provided DOCUMENT CHUNKS.
+        
+        CRITICAL RULES:
+        1. If the exact answer is not explicitly found in the chunks, you MUST reply with exactly: "I do not have data on this subject in my current memory vault."
+        2. Every document chunk provided to you begins with a [SOURCE: ...] tag. If you answer the question, you MUST add a "Sources Used:" list at the very end, citing exactly which tags provided the info.
+        """
+        
+        user_prompt = f"DOCUMENT CHUNKS:\n{context_string}\n\nQUESTION: {q.text}"
+        
+        response = ollama.chat(model='llama3.2', messages=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt}
+        ])
         
         return {
             "answer": response['message']['content'],
@@ -334,133 +314,6 @@ async def search(q: Query):
         }
     except Exception as e:
         return {"answer": f"Error: {str(e)}", "context": []}
-
-@app.get("/v1/models")
-async def get_openai_models():
-    """This satisfies Open WebUI's connection check and populates the model dropdown."""
-    import time
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": "swarm-llama3.2", # This is the name that will show up in Open WebUI
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": "os2-enterprise"
-            }
-        ]
-    }
-
-@app.post("/v1/chat/completions")
-async def openai_chat_completions(req: ChatCompletionRequest):
-    global LATEST_QUERY_VECTOR
-    try:
-        user_messages = [m for m in req.messages if m.role == 'user']
-        if not user_messages:
-            return {"error": "No user message found."}
-        
-        query_text = user_messages[-1].content
-        
-        # --- THE ASYNC GENERATOR FOR STREAMING ---
-        async def generate_stream():
-            async with GPU_SEMAPHORE:
-                # 1. Update 3D Map
-                objective_vector = torch.tensor(memory.embedder.encode(query_text)).unsqueeze(0)
-                global LATEST_QUERY_VECTOR
-                LATEST_QUERY_VECTOR = F.normalize(objective_vector, p=2, dim=1).numpy()
-                
-                # 2. Recall Context
-                resonant_context = memory.recall(query_text, top_k=3)
-                context_string = "\n---\n".join(resonant_context)
-                
-                system_prompt = """You are a strictly constrained data-extraction AI. You have NO external knowledge. 
-                Your ONLY job is to answer the user's question using EXCLUSIVELY the provided DOCUMENT CHUNKS.
-                
-                CRITICAL RULES:
-                1. If the exact answer is not explicitly found in the chunks, reply with exactly: "I do not have data on this subject in my current memory vault."
-                2. Every chunk begins with a [SOURCE: ...] tag. You MUST add a "Sources Used:" list at the end of your answer.
-                """
-                
-                user_prompt = f"DOCUMENT CHUNKS:\n{context_string}\n\nQUESTION: {query_text}"
-                
-                chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
-                created_time = int(time.time())
-
-                # 3. Call Ollama WITH stream=True
-                stream_response = ollama.chat(
-                    model='llama3.2', 
-                    messages=[
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt}
-                    ],
-                    stream=True # <--- This is the magic switch!
-                )
-                
-                # 4. Stream chunks back to Open WebUI instantly
-                for chunk in stream_response:
-                    content = chunk.get('message', {}).get('content', '')
-                    if content:
-                        data = {
-                            "id": chunk_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_time,
-                            "model": req.model,
-                            "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
-                        }
-                        yield f"data: {json.dumps(data)}\n\n"
-                
-                # 5. Tell Open WebUI we are finished
-                stop_data = {
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created_time,
-                    "model": req.model,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
-                }
-                yield f"data: {json.dumps(stop_data)}\n\n"
-                yield "data: [DONE]\n\n"
-
-        # --- ROUTING LOGIC ---
-        # If the frontend asked for a stream, send the generator.
-        if req.stream:
-            return StreamingResponse(generate_stream(), media_type="text/event-stream")
-        
-        # If the frontend didn't ask for a stream, wait for the whole thing (Standard Queue)
-        async with GPU_SEMAPHORE:
-            objective_vector = torch.tensor(memory.embedder.encode(query_text)).unsqueeze(0)
-            LATEST_QUERY_VECTOR = F.normalize(objective_vector, p=2, dim=1).numpy()
-            
-            resonant_context = memory.recall(query_text, top_k=3)
-            context_string = "\n---\n".join(resonant_context)
-            
-            system_prompt = """You are a strictly constrained data-extraction AI. You have NO external knowledge. 
-                Your ONLY job is to answer the user's question using EXCLUSIVELY the provided DOCUMENT CHUNKS.
-                
-                CRITICAL RULES:
-                1. If the exact answer is not explicitly found in the chunks, reply with exactly: "I do not have data on this subject in my current memory vault."
-                2. Every chunk begins with a [SOURCE: ...] tag. You MUST add a "Sources Used:" list at the end of your answer.
-                """
-                
-            user_prompt = f"DOCUMENT CHUNKS:\n{context_string}\n\nQUESTION: {query_text}"
-            
-            response = ollama.chat(model='llama3.2', messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt}
-            ])
-            
-            answer = response['message']['content']
-            
-            return {
-                "id": f"chatcmpl-{uuid.uuid4().hex}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": req.model, 
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}]
-            }
-
-    except Exception as e:
-        print(f"API Error: {e}")
-        return {"error": {"message": str(e), "type": "server_error", "code": 500}}
 
 @app.post("/wipe")
 async def wipe_brain():

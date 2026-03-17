@@ -59,3 +59,14 @@ Thumbs.db
 
 # LLM Data
 swarm_env/
+*.Identifier
+*.zim
+*.pth
+*.json
+*.pdf
+*.db
+*.txt
+*.index
+
+# Project-specific ignores
+!requirements.txt
